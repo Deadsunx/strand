@@ -1,0 +1,147 @@
+import { useEffect, useState } from "react";
+import {
+    useAppActions,
+    useAppState,
+    useController,
+} from "../app/AppContext.tsx";
+import { SilkThread } from "./SilkThread.tsx";
+
+export function Home() {
+    const controller = useController();
+    const actions = useAppActions();
+    const discoverable = useAppState((s) => s.discoverable);
+    const networkToken = useAppState((s) => s.networkToken);
+
+    const [code, setCode] = useState("");
+    const [busy, setBusy] = useState<"create" | "join" | null>(null);
+
+    // Pre-fill from a shared invite link (?code=ABC123).
+    useEffect(() => {
+        const linked = new URLSearchParams(window.location.search)
+            .get("code")
+            ?.toUpperCase();
+        if (linked) setCode(linked.replace(/[^A-Z0-9]/g, "").slice(0, 6));
+    }, []);
+
+    async function handleCreate() {
+        setBusy("create");
+        try {
+            await controller.createRoom();
+        } catch {
+            /* error surfaced via store */
+        } finally {
+            setBusy(null);
+        }
+    }
+
+    async function handleJoin(e: React.FormEvent) {
+        e.preventDefault();
+        if (code.length !== 6) return;
+        setBusy("join");
+        try {
+            await controller.joinRoom(code);
+        } catch {
+            /* error surfaced via store */
+        } finally {
+            setBusy(null);
+        }
+    }
+
+    return (
+        <section className="home">
+            <p className="eyebrow">Peer-to-peer · No cloud · Encrypted</p>
+            <SilkThread />
+            <h1 className="home-title">
+                One thread, <span className="accent">two devices.</span>
+            </h1>
+            <p className="home-sub">
+                Files travel straight from your device to theirs — no upload, no
+                size limit, encrypted end to end. Start a flight, share the code,
+                and you're connected.
+            </p>
+
+            <div className="home-actions">
+                <button
+                    type="button"
+                    className="btn btn-primary"
+                    onClick={handleCreate}
+                    disabled={busy !== null}
+                >
+                    {busy === "create" ? "Creating…" : "Create a Flight"}
+                </button>
+
+                <div className="home-or" aria-hidden="true">
+                    or
+                </div>
+
+                <form className="join-form" onSubmit={handleJoin}>
+                    <label htmlFor="flight-code" className="sr-only">
+                        Enter flight code to join
+                    </label>
+                    <input
+                        id="flight-code"
+                        className="code-input"
+                        inputMode="text"
+                        autoCapitalize="characters"
+                        autoComplete="off"
+                        spellCheck={false}
+                        maxLength={6}
+                        placeholder="ABC123"
+                        value={code}
+                        onChange={(e) =>
+                            setCode(
+                                e.target.value
+                                    .toUpperCase()
+                                    .replace(/[^A-Z0-9]/g, "")
+                                    .slice(0, 6)
+                            )
+                        }
+                    />
+                    <button
+                        type="submit"
+                        className="btn btn-secondary"
+                        disabled={code.length !== 6 || busy !== null}
+                    >
+                        {busy === "join" ? "Joining…" : "Join Flight"}
+                    </button>
+                </form>
+            </div>
+
+            <details className="discovery">
+                <summary>Nearby-device discovery (optional)</summary>
+                <p className="discovery-note">
+                    Off by default for privacy. When enabled, others on your
+                    network can see your name and invite you. Add a shared PIN to
+                    only match people who enter the same one.
+                </p>
+                <label className="checkbox">
+                    <input
+                        type="checkbox"
+                        checked={discoverable}
+                        onChange={(e) =>
+                            actions.setDiscovery({
+                                discoverable: e.target.checked,
+                            })
+                        }
+                    />
+                    Make me discoverable on this network
+                </label>
+                <label className="field">
+                    <span>Shared PIN (optional)</span>
+                    <input
+                        type="text"
+                        className="text-input"
+                        placeholder="e.g. team-42"
+                        value={networkToken ?? ""}
+                        disabled={!discoverable}
+                        onChange={(e) =>
+                            actions.setDiscovery({
+                                networkToken: e.target.value || null,
+                            })
+                        }
+                    />
+                </label>
+            </details>
+        </section>
+    );
+}

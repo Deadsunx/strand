@@ -1,0 +1,63 @@
+# One-command Strand stack: Postgres + signaling backend + React frontend.
+#
+#   cp .env.example .env   # (optional — adjust ports if any are in use)
+#   docker compose up --build
+#
+# Then open http://localhost:${FRONTEND_PORT:-8080}. Two browser tabs/devices on
+# the same machine connect over LAN (no TURN needed). Cross-network peers need
+# Cloudflare TURN credentials (see DEPLOY.md).
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: strand
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - strand_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d strand"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 8080
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/strand
+      DATABASE_SSL: disable
+      # The frontend origin the browser will use — must be allowed for CORS/WS.
+      ALLOWED_ORIGINS: "http://localhost:${FRONTEND_PORT:-8080}"
+      # Optional: enable cross-network TURN by supplying Cloudflare credentials.
+      CLOUDFLARE_TURN_TOKEN_ID: "${CLOUDFLARE_TURN_TOKEN_ID:-}"
+      CLOUDFLARE_API_TOKEN: "${CLOUDFLARE_API_TOKEN:-}"
+    ports:
+      - "${BACKEND_PORT:-8081}:8080"
+
+  frontend:
+    build:
+      context: ./web
+      args:
+        # Baked in at build time — must be the host-published backend URL the
+        # browser can reach, not the compose service name.
+        VITE_API_BASE_URL: "http://localhost:${BACKEND_PORT:-8081}"
+        VITE_WS_URL: "ws://localhost:${BACKEND_PORT:-8081}"
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "${FRONTEND_PORT:-8080}:80"
+
+volumes:
+  strand_pgdata:
