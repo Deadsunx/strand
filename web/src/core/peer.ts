@@ -48,6 +48,8 @@ export class PeerConnection
 {
     private pc: RTCPeerConnection | null = null;
     private channel: RTCDataChannel | null = null;
+    // ICE candidates that arrived before the remote description was set.
+    private pendingCandidates: RTCIceCandidateInit[] = [];
     private readonly highWaterMark: number;
     private readonly createPc: PeerConnectionFactory;
 
@@ -134,13 +136,31 @@ export class PeerConnection
                 await pc.setRemoteDescription(
                     new RTCSessionDescription(payload.sdp)
                 );
+                // The remote description is set — flush any ICE candidates that
+                // raced ahead of it. Dropping these (as addIceCandidate would if
+                // called too early) causes slow/stuck connects on high-latency
+                // links where signaling arrives out of order.
+                for (const candidate of this.pendingCandidates) {
+                    await pc
+                        .addIceCandidate(new RTCIceCandidate(candidate))
+                        .catch(() => {});
+                }
+                this.pendingCandidates = [];
+
                 if (payload.sdp.type === "offer") {
                     const answer = await pc.createAnswer();
                     await pc.setLocalDescription(answer);
                     this.emit("signal", { data: { sdp: pc.localDescription! } });
                 }
             } else if (payload.candidate) {
-                await pc.addIceCandidate(new RTCIceCandidate(payload.candidate));
+                if (pc.remoteDescription) {
+                    await pc.addIceCandidate(
+                        new RTCIceCandidate(payload.candidate)
+                    );
+                } else {
+                    // SDP hasn't arrived yet — hold the candidate until it does.
+                    this.pendingCandidates.push(payload.candidate);
+                }
             }
         } catch (error) {
             this.emit("error", { context: "handleSignal", error: error as Error });
@@ -210,5 +230,6 @@ export class PeerConnection
         }
         this.channel = null;
         this.pc = null;
+        this.pendingCandidates = [];
     }
 }
