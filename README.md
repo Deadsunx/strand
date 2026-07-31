@@ -1,8 +1,19 @@
 # Strand
 
+**▶ Live demo: [strand-silk.vercel.app](https://strand-silk.vercel.app)**
+
+[![License: GPL v3](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE)
+![WebRTC](https://img.shields.io/badge/WebRTC-P2P-5b9bff)
+![React](https://img.shields.io/badge/React-19-61dafb)
+![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6)
+
 Fast, private, peer-to-peer file sharing — files travel straight from one device
 to another over WebRTC. No cloud storage, no size limits, end-to-end encrypted by
 the browser's transport. Chat and screen sharing ride the same connection.
+
+> Open the demo in two tabs (or two devices), create a flight in one, paste the
+> code in the other, and send. On the free hosting tiers the first request may
+> take ~50s to wake the backend.
 
 Strand is a rebuild of the GPL-3.0 [DropSilk](https://github.com/medy17/dropsilk):
 a hardened backend plus a from-scratch React frontend built on a headless,
