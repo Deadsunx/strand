@@ -65,6 +65,11 @@ export class PeerConnection
         return this.channel?.readyState === "open";
     }
 
+    /** Current RTCPeerConnection state, or null if not initialized. */
+    connectionState(): RTCPeerConnectionState | null {
+        return this.pc?.connectionState ?? null;
+    }
+
     /** Create the peer connection. The offerer opens the data channel. */
     async initialize(isOfferer: boolean): Promise<void> {
         if (this.pc) return;

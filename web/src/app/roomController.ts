@@ -40,6 +40,8 @@ export interface RoomControllerDeps {
     createChunkReader?: (file: File) => ChunkReader;
     pollIntervalMs?: number;
     metricsIntervalMs?: number;
+    /** Grace period before a "disconnected" peer connection is treated as gone. */
+    disconnectGraceMs?: number;
     setInterval?: (fn: () => void, ms: number) => number;
     clearInterval?: (handle: number) => void;
     now?: () => number;
@@ -84,6 +86,7 @@ export class RoomController {
             | "createChunkReader"
             | "pollIntervalMs"
             | "metricsIntervalMs"
+            | "disconnectGraceMs"
             | "setInterval"
             | "clearInterval"
             | "now"
@@ -124,12 +127,16 @@ export class RoomController {
     // screen share and voice can be active at the same time.
     private remoteTracks = new Set<MediaStreamTrack>();
 
+    // Grace timer for a transient "disconnected" connection state.
+    private disconnectTimer: number | null = null;
+
     constructor(deps: RoomControllerDeps) {
         this.deps = {
             createChunkReader: (file) =>
                 new BlobChunkReader(file, DEFAULT_CHUNK_SIZE),
             pollIntervalMs: 1500,
             metricsIntervalMs: 1000,
+            disconnectGraceMs: 8000,
             setInterval: (fn, ms) =>
                 globalThis.setInterval(fn, ms) as unknown as number,
             clearInterval: (h) => globalThis.clearInterval(h),
@@ -184,6 +191,7 @@ export class RoomController {
     leave(): void {
         this.stopPolling();
         this.stopMetrics();
+        this.clearDisconnectGrace();
         this.teardownMedia();
         this.signaling?.disconnect({ silent: true });
         this.sender?.cancel();
@@ -358,10 +366,38 @@ export class RoomController {
         });
         peer.on("remoteTrack", ({ track }) => this.addRemoteTrack(track));
         peer.on("connectionStateChange", ({ state }) => {
-            if (["failed", "closed", "disconnected"].includes(state)) {
+            if (state === "failed" || state === "closed") {
+                // Terminal — the connection is gone.
+                this.clearDisconnectGrace();
                 this.handlePeerLeft();
+            } else if (state === "disconnected") {
+                // Often transient (e.g. a blip during renegotiation when voice
+                // or screen share starts, or brief packet loss on a long-haul
+                // link). Give it a chance to recover before declaring the peer
+                // gone — WebRTC can transition disconnected → connected.
+                this.startDisconnectGrace();
+            } else if (state === "connected") {
+                this.clearDisconnectGrace();
             }
         });
+    }
+
+    private startDisconnectGrace(): void {
+        if (this.disconnectTimer !== null) return;
+        this.disconnectTimer = this.deps.setInterval(() => {
+            this.clearDisconnectGrace();
+            // Still not recovered after the grace window → treat as left.
+            if (!this.peer || this.peer.connectionState() !== "connected") {
+                this.handlePeerLeft();
+            }
+        }, this.deps.disconnectGraceMs);
+    }
+
+    private clearDisconnectGrace(): void {
+        if (this.disconnectTimer !== null) {
+            this.deps.clearInterval(this.disconnectTimer);
+            this.disconnectTimer = null;
+        }
     }
 
     private wireReceiver(receiver: FileReceiver): void {
@@ -692,6 +728,7 @@ export class RoomController {
     // --- Peer loss ---------------------------------------------------------
 
     private handlePeerLeft(): void {
+        this.clearDisconnectGrace();
         const state = this.deps.store.getState();
         if (!state.connectedPeer && !state.roomPeer) return;
 
