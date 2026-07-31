@@ -26,7 +26,7 @@ export interface ResolveUrlEnv {
     productionBackend?: string;
 }
 
-const DEFAULT_PRODUCTION_BACKEND = "dropsilk-backend.onrender.com";
+const DEFAULT_PRODUCTION_BACKEND = "strand-qicz.onrender.com";
 
 function isPreviewMode(location: LocationLike): boolean {
     return (
