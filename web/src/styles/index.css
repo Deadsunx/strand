@@ -723,6 +723,68 @@ main:focus {
     padding: 6px 10px;
     background: var(--surface);
 }
+.media-controls {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+.voice-indicator {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 14px 16px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text);
+    font-size: 0.9rem;
+}
+.voice-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--success);
+    box-shadow: 0 0 0 0 var(--success);
+    animation: voice-pulse 1.6s ease-out infinite;
+}
+.voice-indicator.is-self .voice-dot {
+    background: var(--accent);
+}
+@keyframes voice-pulse {
+    0% {
+        box-shadow: 0 0 0 0 rgba(69, 214, 191, 0.5);
+    }
+    100% {
+        box-shadow: 0 0 0 10px rgba(69, 214, 191, 0);
+    }
+}
+@media (prefers-reduced-motion: reduce) {
+    .voice-dot {
+        animation: none;
+    }
+}
+
+/* --- Invitation toast --- */
+.invitation-toast {
+    position: fixed;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--surface);
+    border: 1px solid var(--accent);
+    box-shadow: var(--glow), var(--shadow);
+    border-radius: var(--radius);
+    padding: 14px 18px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    max-width: 90vw;
+    z-index: 150;
+}
+.invitation-actions {
+    display: flex;
+    gap: 8px;
+}
 
 /* --- Metrics --- */
 .metrics-bar {

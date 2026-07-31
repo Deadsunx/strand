@@ -87,6 +87,9 @@ export interface AppState {
     localStream: MediaStream | null;
     remoteStream: MediaStream | null;
 
+    // --- voice ---
+    micActive: boolean;
+
     // --- misc ui ---
     lastError: string | null;
     incomingInvitation: { flightCode: string; fromName: string } | null;
@@ -134,6 +137,7 @@ export interface AppActions {
     setScreenSharing: (sharing: boolean) => void;
     setLocalStream: (stream: MediaStream | null) => void;
     setRemoteStream: (stream: MediaStream | null) => void;
+    setMicActive: (active: boolean) => void;
 
     setError: (message: string | null) => void;
     resetRoom: () => void;
@@ -162,6 +166,7 @@ const initialCoreState: Omit<AppState, "actions" | "myName" | "myId" | "discover
     screenSharing: false,
     localStream: null,
     remoteStream: null,
+    micActive: false,
     lastError: null,
     incomingInvitation: null,
 };
@@ -263,6 +268,7 @@ export function createAppStore(initialName: string) {
             setScreenSharing: (sharing) => set({ screenSharing: sharing }),
             setLocalStream: (stream) => set({ localStream: stream }),
             setRemoteStream: (stream) => set({ remoteStream: stream }),
+            setMicActive: (active) => set({ micActive: active }),
 
             setError: (message) => set({ lastError: message }),
 

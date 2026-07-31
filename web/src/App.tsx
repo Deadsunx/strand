@@ -5,6 +5,7 @@ import { Home } from "./components/Home.tsx";
 import { Flight } from "./components/Flight.tsx";
 import { Toast } from "./components/Toast.tsx";
 import { Announcer } from "./components/Announcer.tsx";
+import { InvitationToast } from "./components/InvitationToast.tsx";
 
 export function App() {
     const screen = useAppState((s) => s.screen);
@@ -29,6 +30,7 @@ export function App() {
                 {screen === "home" ? <Home /> : <Flight />}
             </main>
             <Announcer />
+            <InvitationToast />
             {lastError && (
                 <Toast
                     message={lastError}

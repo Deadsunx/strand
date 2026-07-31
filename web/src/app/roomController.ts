@@ -116,6 +116,14 @@ export class RoomController {
     private localScreenStream: MediaStream | null = null;
     private screenSenders: RTCRtpSender[] = [];
 
+    // Voice
+    private micStream: MediaStream | null = null;
+    private micSenders: RTCRtpSender[] = [];
+
+    // All inbound media tracks (screen video/audio + voice), accumulated so
+    // screen share and voice can be active at the same time.
+    private remoteTracks = new Set<MediaStreamTrack>();
+
     constructor(deps: RoomControllerDeps) {
         this.deps = {
             createChunkReader: (file) =>
@@ -176,7 +184,7 @@ export class RoomController {
     leave(): void {
         this.stopPolling();
         this.stopMetrics();
-        this.teardownScreenShare();
+        this.teardownMedia();
         this.signaling?.disconnect({ silent: true });
         this.sender?.cancel();
         this.peer?.close();
@@ -348,9 +356,7 @@ export class RoomController {
         peer.on("message", ({ data }) => {
             void this.receiver?.handleMessage(data);
         });
-        peer.on("remoteTrack", ({ streams }) => {
-            if (streams[0]) this.actions.setRemoteStream(streams[0]);
-        });
+        peer.on("remoteTrack", ({ track }) => this.addRemoteTrack(track));
         peer.on("connectionStateChange", ({ state }) => {
             if (["failed", "closed", "disconnected"].includes(state)) {
                 this.handlePeerLeft();
@@ -414,7 +420,12 @@ export class RoomController {
 
         receiver.on("control", ({ type }) => {
             if (type === CONTROL_TYPES.streamEnded) {
-                this.actions.setRemoteStream(null);
+                // Peer stopped screen sharing — drop their video tracks but keep
+                // any voice audio flowing.
+                for (const track of this.remoteTracks) {
+                    if (track.kind === "video") this.remoteTracks.delete(track);
+                }
+                this.refreshRemoteMedia();
             }
         });
 
@@ -501,12 +512,41 @@ export class RoomController {
             });
     }
 
+    // --- Inbound media (screen video/audio + voice) ------------------------
+
+    private addRemoteTrack(track: MediaStreamTrack): void {
+        this.remoteTracks.add(track);
+        track.addEventListener("ended", () => {
+            this.remoteTracks.delete(track);
+            this.refreshRemoteMedia();
+        });
+        this.refreshRemoteMedia();
+    }
+
+    /** Rebuild the remote MediaStream from live tracks (new ref → re-render). */
+    private refreshRemoteMedia(): void {
+        const live = [...this.remoteTracks].filter(
+            (t) => t.readyState === "live"
+        );
+        this.actions.setRemoteStream(live.length ? new MediaStream(live) : null);
+    }
+
+    private remoteHasVideo(): boolean {
+        return [...this.remoteTracks].some(
+            (t) => t.kind === "video" && t.readyState === "live"
+        );
+    }
+
     // --- Screen share ------------------------------------------------------
 
     async startScreenShare(withSystemAudio = true): Promise<void> {
-        const state = this.deps.store.getState();
-        // One sharer at a time: refuse if we're already sharing or the peer is.
-        if (!this.peer?.isOpen() || state.screenSharing || state.remoteStream) {
+        // One screen-sharer at a time: refuse if we're already sharing or the
+        // peer is sending video. Voice audio does not count.
+        if (
+            !this.peer?.isOpen() ||
+            this.deps.store.getState().screenSharing ||
+            this.remoteHasVideo()
+        ) {
             return;
         }
 
@@ -544,22 +584,73 @@ export class RoomController {
         }
     }
 
-    private teardownScreenShare(): void {
-        if (this.localScreenStream) {
-            for (const track of this.localScreenStream.getTracks()) track.stop();
+    // --- Voice chat --------------------------------------------------------
+
+    async startVoice(): Promise<void> {
+        if (!this.peer?.isOpen() || this.deps.store.getState().micActive) return;
+
+        let stream: MediaStream;
+        try {
+            stream = await navigator.mediaDevices.getUserMedia({
+                audio: { echoCancellation: true, noiseSuppression: true },
+                video: false,
+            });
+        } catch {
+            this.actions.setError("Microphone access was blocked.");
+            return;
+        }
+
+        this.micStream = stream;
+        this.actions.setMicActive(true);
+        this.micSenders = await this.peer.addMediaStream(stream);
+    }
+
+    async stopVoice(): Promise<void> {
+        if (this.micStream) {
+            for (const track of this.micStream.getTracks()) track.stop();
+        }
+        if (this.peer && this.micSenders.length > 0) {
+            await this.peer.removeSenders(this.micSenders);
+        }
+        this.micSenders = [];
+        this.micStream = null;
+        this.actions.setMicActive(false);
+    }
+
+    /** Stop all local media and clear inbound media state. */
+    private teardownMedia(): void {
+        for (const stream of [this.localScreenStream, this.micStream]) {
+            if (stream) for (const track of stream.getTracks()) track.stop();
         }
         this.localScreenStream = null;
+        this.micStream = null;
         this.screenSenders = [];
+        this.micSenders = [];
+        this.remoteTracks.clear();
         this.actions.setLocalStream(null);
         this.actions.setRemoteStream(null);
         this.actions.setScreenSharing(false);
+        this.actions.setMicActive(false);
     }
+
+    // --- Nearby-device invitations -----------------------------------------
 
     /** Invite a discovered nearby user into this flight. */
     invite(inviteeId: string): void {
         const { roomCode } = this.deps.store.getState();
         if (!this.signaling || !roomCode) return;
         this.signaling.invite(inviteeId, roomCode);
+    }
+
+    /** Accept an incoming invitation: leave the current flight, join theirs. */
+    async acceptInvitation(flightCode: string): Promise<void> {
+        this.actions.setIncomingInvitation(null);
+        this.leave();
+        await this.joinRoom(flightCode);
+    }
+
+    dismissInvitation(): void {
+        this.actions.setIncomingInvitation(null);
     }
 
     sendChat(text: string): void {
@@ -609,7 +700,7 @@ export class RoomController {
         this.actions.setChatEnabled(false);
         this.actions.setStatusText("Peer disconnected. Waiting…");
         this.stopMetrics();
-        this.teardownScreenShare();
+        this.teardownMedia();
         this.peer?.close();
         this.peer = null;
         void this.receiver?.reset();
