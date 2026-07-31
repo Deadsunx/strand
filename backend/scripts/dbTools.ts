@@ -45,6 +45,7 @@ export function getMigrationDatabaseConfig(): {
     host: string;
     port: number;
     database: string;
+    ssl: false | { rejectUnauthorized: false };
 } {
     const connectionString = process.env.DATABASE_URL;
     if (!connectionString) {
@@ -60,6 +61,10 @@ export function getMigrationDatabaseConfig(): {
         host: parsed.hostname,
         port: Number(parsed.port || 5432),
         database,
+        // Managed Postgres (Neon, Render, …) requires TLS. Without this the
+        // migration client connects insecurely and the provider rejects it
+        // ("connection is insecure"). Mirrors the main pool's SSL resolution.
+        ssl: resolveSsl(connectionString),
     };
 }
 
