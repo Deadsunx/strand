@@ -66,6 +66,8 @@ export interface AppState {
     connectedPeer: SignalingPeer | null;
     connectionType: ConnectionType;
     dataChannelOpen: boolean;
+    /** Peer joined but the secure channel hasn't opened within the grace window. */
+    connectionStalled: boolean;
     statusText: string;
     networkUsers: NetworkUser[];
 
@@ -115,6 +117,7 @@ export interface AppActions {
     setStatusText: (text: string) => void;
     setConnectedPeer: (peer: SignalingPeer | null, connectionType?: ConnectionType) => void;
     setDataChannelOpen: (open: boolean) => void;
+    setConnectionStalled: (stalled: boolean) => void;
     setNetworkUsers: (users: NetworkUser[]) => void;
     setIncomingInvitation: (
         invitation: { flightCode: string; fromName: string } | null
@@ -154,6 +157,7 @@ const initialCoreState: Omit<AppState, "actions" | "myName" | "myId" | "discover
     connectedPeer: null,
     connectionType: "wan",
     dataChannelOpen: false,
+    connectionStalled: false,
     statusText: "",
     networkUsers: [],
     sendQueue: [],
@@ -215,6 +219,7 @@ export function createAppStore(initialName: string) {
                 })),
 
             setDataChannelOpen: (open) => set({ dataChannelOpen: open }),
+            setConnectionStalled: (stalled) => set({ connectionStalled: stalled }),
             setNetworkUsers: (users) => set({ networkUsers: users }),
             setIncomingInvitation: (invitation) =>
                 set({ incomingInvitation: invitation }),

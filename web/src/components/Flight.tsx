@@ -14,6 +14,7 @@ export function Flight() {
     const connectedPeer = useAppState((s) => s.connectedPeer);
     const connectionType = useAppState((s) => s.connectionType);
     const dataChannelOpen = useAppState((s) => s.dataChannelOpen);
+    const connectionStalled = useAppState((s) => s.connectionStalled);
 
     return (
         <section className="flight">
@@ -44,6 +45,22 @@ export function Flight() {
                     Leave
                 </button>
             </div>
+
+            {connectionStalled && !dataChannelOpen && (
+                <div className="reconnect-banner" role="alert">
+                    <span>
+                        Taking longer than usual to connect — this can happen on
+                        distant or slow networks.
+                    </span>
+                    <button
+                        type="button"
+                        className="btn btn-primary btn-sm"
+                        onClick={() => controller.retryConnection()}
+                    >
+                        Reconnect
+                    </button>
+                </div>
+            )}
 
             {!connectedPeer && (
                 <>

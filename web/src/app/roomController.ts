@@ -42,6 +42,8 @@ export interface RoomControllerDeps {
     metricsIntervalMs?: number;
     /** Grace period before a "disconnected" peer connection is treated as gone. */
     disconnectGraceMs?: number;
+    /** How long to wait for the data channel to open before flagging a stall. */
+    connectionStallMs?: number;
     setInterval?: (fn: () => void, ms: number) => number;
     clearInterval?: (handle: number) => void;
     now?: () => number;
@@ -87,6 +89,7 @@ export class RoomController {
             | "pollIntervalMs"
             | "metricsIntervalMs"
             | "disconnectGraceMs"
+            | "connectionStallMs"
             | "setInterval"
             | "clearInterval"
             | "now"
@@ -129,6 +132,8 @@ export class RoomController {
 
     // Grace timer for a transient "disconnected" connection state.
     private disconnectTimer: number | null = null;
+    // Watchdog: fires if the data channel doesn't open soon after the peer joins.
+    private stallTimer: number | null = null;
 
     constructor(deps: RoomControllerDeps) {
         this.deps = {
@@ -137,6 +142,7 @@ export class RoomController {
             pollIntervalMs: 1500,
             metricsIntervalMs: 1000,
             disconnectGraceMs: 8000,
+            connectionStallMs: 20000,
             setInterval: (fn, ms) =>
                 globalThis.setInterval(fn, ms) as unknown as number,
             clearInterval: (h) => globalThis.clearInterval(h),
@@ -192,6 +198,7 @@ export class RoomController {
         this.stopPolling();
         this.stopMetrics();
         this.clearDisconnectGrace();
+        this.clearStallWatchdog();
         this.teardownMedia();
         this.signaling?.disconnect({ silent: true });
         this.sender?.cancel();
@@ -286,20 +293,27 @@ export class RoomController {
         this.signalingInitiated = true;
 
         const signaling = this.deps.createSignaling();
-        const peer = this.deps.createPeer();
         const receiver = this.deps.createReceiver();
-        const sender = this.deps.createSender(peer);
         this.signaling = signaling;
-        this.peer = peer;
         this.receiver = receiver;
-        this.sender = sender;
 
         this.wireSignaling(signaling);
-        this.wirePeer(peer);
         this.wireReceiver(receiver);
-        this.wireSender(sender);
+        // The peer/sender are built on peer-joined (below), so there's exactly
+        // one peer per pairing and no early offer can land on a throwaway one.
 
         signaling.connect();
+    }
+
+    /** (Re)create the peer connection + sender and wire them. Called on every
+     *  peer-joined, so a retry starts from a clean, symmetric handshake. */
+    private buildPeerStack(): void {
+        this.peer?.close();
+        const peer = this.deps.createPeer();
+        this.peer = peer;
+        this.wirePeer(peer);
+        this.sender = this.deps.createSender(peer);
+        this.wireSender(this.sender);
     }
 
     private wireSignaling(signaling: SignalingClient): void {
@@ -326,9 +340,13 @@ export class RoomController {
             this.actions.setConnectedPeer(peer, connectionType);
             this.actions.setChatEnabled(true);
             this.stopPolling();
+            // Fresh peer for a clean negotiation — makes re-attach (retry)
+            // symmetric: both sides rebuild and renegotiate from scratch.
+            this.buildPeerStack();
             if (store.getState().isCreator) {
                 void this.peer?.initialize(true);
             }
+            this.startStallWatchdog();
         });
 
         signaling.on("signal", ({ data }) => {
@@ -353,6 +371,8 @@ export class RoomController {
     private wirePeer(peer: PeerConnection): void {
         peer.on("signal", ({ data }) => this.signaling?.sendSignal(data));
         peer.on("open", () => {
+            this.clearStallWatchdog();
+            this.actions.setConnectionStalled(false);
             this.actions.setDataChannelOpen(true);
             this.actions.setStatusText("Connected");
             this.stopPolling();
@@ -397,6 +417,39 @@ export class RoomController {
         if (this.disconnectTimer !== null) {
             this.deps.clearInterval(this.disconnectTimer);
             this.disconnectTimer = null;
+        }
+    }
+
+    private startStallWatchdog(): void {
+        this.clearStallWatchdog();
+        this.actions.setConnectionStalled(false);
+        this.stallTimer = this.deps.setInterval(() => {
+            this.clearStallWatchdog();
+            if (!this.deps.store.getState().dataChannelOpen) {
+                // Handshake didn't complete — surface a manual retry.
+                this.actions.setConnectionStalled(true);
+            }
+        }, this.deps.connectionStallMs);
+    }
+
+    private clearStallWatchdog(): void {
+        if (this.stallTimer !== null) {
+            this.deps.clearInterval(this.stallTimer);
+            this.stallTimer = null;
+        }
+    }
+
+    /** User-triggered retry of a stalled handshake: re-attach the room so the
+     *  server re-pairs both sides, which rebuilds the peers and renegotiates. */
+    retryConnection(): void {
+        const { roomCode, participantId } = this.deps.store.getState();
+        this.actions.setConnectionStalled(false);
+        this.actions.setStatusText("Reconnecting…");
+        if (this.signaling && roomCode && participantId) {
+            this.signaling.attachRoom({ roomCode, participantId });
+        } else {
+            // No live signaling to re-attach — do a full rejoin.
+            this.connectSignaling();
         }
     }
 
@@ -729,6 +782,8 @@ export class RoomController {
 
     private handlePeerLeft(): void {
         this.clearDisconnectGrace();
+        this.clearStallWatchdog();
+        this.actions.setConnectionStalled(false);
         const state = this.deps.store.getState();
         if (!state.connectedPeer && !state.roomPeer) return;
 

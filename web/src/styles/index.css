@@ -474,6 +474,21 @@ main:focus {
     border-radius: 999px;
 }
 
+.reconnect-banner {
+    margin-top: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+    background: var(--surface);
+    border: 1px solid var(--accent);
+    border-radius: var(--radius);
+    padding: 14px 18px;
+    color: var(--text);
+    box-shadow: var(--glow);
+}
+
 .invite-box {
     margin-top: 16px;
     background: var(--surface);
