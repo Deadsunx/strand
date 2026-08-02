@@ -96,7 +96,12 @@ export interface AppState {
 
     // --- misc ui ---
     lastError: string | null;
-    incomingInvitation: { flightCode: string; fromName: string } | null;
+    incomingInvitation: {
+        flightCode: string;
+        fromName: string;
+        /** Epoch ms when this invitation auto-expires (for the countdown). */
+        expiresAt: number;
+    } | null;
 
     actions: AppActions;
 }
@@ -124,7 +129,11 @@ export interface AppActions {
     addInvitedUser: (id: string) => void;
     removeInvitedUser: (id: string) => void;
     setIncomingInvitation: (
-        invitation: { flightCode: string; fromName: string } | null
+        invitation: {
+            flightCode: string;
+            fromName: string;
+            expiresAt: number;
+        } | null
     ) => void;
 
     enqueueFiles: (files: File[]) => SendItem[];

@@ -148,8 +148,6 @@ export class RoomController {
     private inviteCooldownTimers = new Map<string, number>();
     // Auto-dismiss timer for an incoming invitation on the invitee's side.
     private invitationTimer: number | null = null;
-    // While true, the room poll won't overwrite the "Invite sent…" status.
-    private pendingInviteStatus = false;
 
     constructor(deps: RoomControllerDeps) {
         this.deps = {
@@ -218,7 +216,6 @@ export class RoomController {
         this.clearStallWatchdog();
         this.clearAllInviteCooldowns();
         this.clearInvitationTimeout();
-        this.pendingInviteStatus = false;
         this.teardownMedia();
         this.signaling?.disconnect({ silent: true });
         this.sender?.cancel();
@@ -246,10 +243,12 @@ export class RoomController {
             peer: summary.peer,
         });
         // Don't clobber the "Invite sent…" message with the generic waiting
-        // text while an invite is still outstanding.
+        // text while an invite is still outstanding. Once every invite expires
+        // (or the peer joins), the lock releases and the next poll restores the
+        // real status — so a never-answered invite no longer sticks forever.
         if (
             !this.deps.store.getState().dataChannelOpen &&
-            !this.pendingInviteStatus
+            !this.hasOutstandingInvite()
         ) {
             this.actions.setStatusText(statusTextFor(summary));
         }
@@ -377,7 +376,7 @@ export class RoomController {
         signaling.on("registered", ({ id }) => this.actions.setMyId(id));
 
         signaling.on("peerJoined", ({ peer, connectionType }) => {
-            this.pendingInviteStatus = false;
+            this.clearAllInviteCooldowns();
             this.actions.setConnectedPeer(peer, connectionType);
             this.actions.setChatEnabled(true);
             this.stopPolling();
@@ -399,7 +398,10 @@ export class RoomController {
         );
 
         signaling.on("flightInvitation", (invitation) => {
-            this.actions.setIncomingInvitation(invitation);
+            this.actions.setIncomingInvitation({
+                ...invitation,
+                expiresAt: this.deps.now() + this.deps.inviteCooldownMs,
+            });
             this.startInvitationTimeout();
         });
 
@@ -785,6 +787,10 @@ export class RoomController {
             return;
         }
         this.actions.setNetworkUsers([]);
+        // Going offline cancels any invitation we were showing: it arrived on
+        // the socket we're about to drop, so its Join/countdown would be stale.
+        this.clearInvitationTimeout();
+        this.actions.setIncomingInvitation(null);
         this.signaling?.disconnect({ silent: true });
         this.signaling = null;
         this.receiver = null;
@@ -839,13 +845,18 @@ export class RoomController {
         if (this.isOnInviteCooldown(inviteeId)) return false;
         this.signaling.invite(inviteeId, roomCode);
         this.startInviteCooldown(inviteeId);
-        this.pendingInviteStatus = true;
         this.actions.setStatusText("Invite sent. Waiting for them to join…");
         return true;
     }
 
     private isOnInviteCooldown(inviteeId: string): boolean {
         return this.inviteCooldownTimers.has(inviteeId);
+    }
+
+    /** True while any invite is still within its cooldown window. Used to hold
+     *  the "Invite sent…" status until the last invite expires or is answered. */
+    private hasOutstandingInvite(): boolean {
+        return this.inviteCooldownTimers.size > 0;
     }
 
     private startInviteCooldown(inviteeId: string): void {
@@ -867,10 +878,9 @@ export class RoomController {
     }
 
     private clearAllInviteCooldowns(): void {
-        for (const handle of this.inviteCooldownTimers.values()) {
-            this.deps.clearInterval(handle);
+        for (const inviteeId of [...this.inviteCooldownTimers.keys()]) {
+            this.clearInviteCooldown(inviteeId);
         }
-        this.inviteCooldownTimers.clear();
     }
 
     /** Auto-dismiss the incoming invitation after the cooldown window, so it
@@ -944,7 +954,7 @@ export class RoomController {
     private handlePeerLeft(): void {
         this.clearDisconnectGrace();
         this.clearStallWatchdog();
-        this.pendingInviteStatus = false;
+        this.clearAllInviteCooldowns();
         this.actions.setConnectionStalled(false);
         const state = this.deps.store.getState();
         if (!state.connectedPeer && !state.roomPeer) return;

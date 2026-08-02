@@ -415,6 +415,56 @@ main:focus {
     gap: 8px;
     margin: 8px 0;
 }
+/* Discoverable on/off switch */
+.toggle {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 12px 0;
+    padding: 0;
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+}
+.toggle-track {
+    flex: 0 0 auto;
+    width: 40px;
+    height: 22px;
+    border-radius: 999px;
+    background: var(--border);
+    border: 1px solid var(--border);
+    transition: background 0.18s ease;
+    position: relative;
+}
+.toggle-thumb {
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--surface);
+    box-shadow: var(--shadow);
+    transition: transform 0.18s ease;
+}
+.toggle.is-on .toggle-track {
+    background: var(--accent);
+    border-color: var(--accent);
+}
+.toggle.is-on .toggle-thumb {
+    transform: translateX(18px);
+}
+.toggle:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+    border-radius: 6px;
+}
+.toggle-label {
+    font-weight: 500;
+}
 .field {
     display: flex;
     flex-direction: column;
@@ -799,6 +849,11 @@ main:focus {
 .invitation-actions {
     display: flex;
     gap: 8px;
+}
+.invitation-countdown {
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
 }
 
 /* --- Metrics --- */

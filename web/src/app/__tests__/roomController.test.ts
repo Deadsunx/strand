@@ -498,6 +498,44 @@ describe("RoomController", () => {
         expect(h.store.getState().invitedUserIds).not.toContain("guest-1");
     });
 
+    it("cancels a pending invitation when discovery is turned off", async () => {
+        h.store.getState().actions.setDiscovery({ discoverable: true });
+        h.controller.startDiscovery();
+        h.socket().open();
+
+        h.socket().receive({
+            type: "flight-invitation",
+            flightCode: "ZZZ999",
+            fromName: "Bob",
+        });
+        expect(h.store.getState().incomingInvitation).not.toBeNull();
+
+        // Opting out of discovery drops the socket the invite came on, so the
+        // stale invitation is cleared rather than left dangling.
+        h.controller.stopDiscovery();
+        expect(h.store.getState().incomingInvitation).toBeNull();
+    });
+
+    it("restores the waiting status after an unanswered invite expires", async () => {
+        h.store.getState().actions.setDiscovery({ discoverable: true });
+        h.controller.startDiscovery();
+        h.socket().open();
+
+        await h.controller.connectToUser("guest-1");
+        expect(h.store.getState().statusText).toBe(
+            "Invite sent. Waiting for them to join…"
+        );
+
+        h.fireTimers(); // expire the cooldown (releases the status lock)
+        await tick();
+        h.runPoll(); // the next poll now restores the generic waiting text
+        await tick();
+        expect(h.store.getState().statusText).toBe(
+            "Room created. Waiting for peer…"
+        );
+        expect(h.store.getState().invitedUserIds).not.toContain("guest-1");
+    });
+
     it("auto-dismisses an incoming invitation after the window", async () => {
         h = makeHarness(summaryWithPeer());
         await h.controller.createRoom();

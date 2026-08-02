@@ -131,18 +131,22 @@ export function Home() {
                     needed. Add a shared PIN to only match people who enter the
                     same one.
                 </p>
-                <label className="checkbox">
-                    <input
-                        type="checkbox"
-                        checked={discoverable}
-                        onChange={(e) =>
-                            actions.setDiscovery({
-                                discoverable: e.target.checked,
-                            })
-                        }
-                    />
-                    Make me discoverable on this network
-                </label>
+                <button
+                    type="button"
+                    role="switch"
+                    aria-checked={discoverable}
+                    className={`toggle ${discoverable ? "is-on" : ""}`}
+                    onClick={() =>
+                        actions.setDiscovery({ discoverable: !discoverable })
+                    }
+                >
+                    <span className="toggle-track" aria-hidden="true">
+                        <span className="toggle-thumb" />
+                    </span>
+                    <span className="toggle-label">
+                        Make me discoverable on this network
+                    </span>
+                </button>
                 <label className="field">
                     <span>Shared PIN (optional)</span>
                     <input
