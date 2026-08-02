@@ -70,6 +70,8 @@ export interface AppState {
     connectionStalled: boolean;
     statusText: string;
     networkUsers: NetworkUser[];
+    /** Ids of nearby users we've just invited and can't re-invite yet (cooldown). */
+    invitedUserIds: string[];
 
     // --- transfer ---
     sendQueue: SendItem[];
@@ -119,6 +121,8 @@ export interface AppActions {
     setDataChannelOpen: (open: boolean) => void;
     setConnectionStalled: (stalled: boolean) => void;
     setNetworkUsers: (users: NetworkUser[]) => void;
+    addInvitedUser: (id: string) => void;
+    removeInvitedUser: (id: string) => void;
     setIncomingInvitation: (
         invitation: { flightCode: string; fromName: string } | null
     ) => void;
@@ -160,6 +164,7 @@ const initialCoreState: Omit<AppState, "actions" | "myName" | "myId" | "discover
     connectionStalled: false,
     statusText: "",
     networkUsers: [],
+    invitedUserIds: [],
     sendQueue: [],
     receiveItems: [],
     totalBytesSent: 0,
@@ -221,6 +226,16 @@ export function createAppStore(initialName: string) {
             setDataChannelOpen: (open) => set({ dataChannelOpen: open }),
             setConnectionStalled: (stalled) => set({ connectionStalled: stalled }),
             setNetworkUsers: (users) => set({ networkUsers: users }),
+            addInvitedUser: (id) =>
+                set((s) =>
+                    s.invitedUserIds.includes(id)
+                        ? s
+                        : { invitedUserIds: [...s.invitedUserIds, id] }
+                ),
+            removeInvitedUser: (id) =>
+                set((s) => ({
+                    invitedUserIds: s.invitedUserIds.filter((x) => x !== id),
+                })),
             setIncomingInvitation: (invitation) =>
                 set({ incomingInvitation: invitation }),
 

@@ -130,13 +130,17 @@ interface Harness {
         markParticipantReady: ReturnType<typeof vi.fn>;
     };
     runPoll: () => void;
+    fireTimers: () => void;
 }
 
 function makeHarness(firstSummary: RoomSummary): Harness {
     const store = createAppStore("Alice");
     let socket: FakeSocket;
     let peer: FakePeer;
-    let pollFn: (() => void) | null = null;
+    // All active fake intervals, keyed by handle in registration order. The
+    // poll is registered first, so runPoll() fires the earliest live timer.
+    const timers = new Map<number, () => void>();
+    let nextHandle = 1;
 
     const roomApi = {
         createRoom: vi.fn(async () => firstSummary),
@@ -163,13 +167,15 @@ function makeHarness(firstSummary: RoomSummary): Harness {
         createSender: (transport: SendTransport) => new FileSender(transport),
         createReceiver: () => new FileReceiver(),
         setInterval: (fn) => {
-            pollFn = fn;
-            return 1;
+            const handle = nextHandle++;
+            timers.set(handle, fn);
+            return handle;
         },
-        clearInterval: () => {
-            pollFn = null;
+        clearInterval: (handle) => {
+            timers.delete(handle);
         },
         now: () => 1000,
+        inviteCooldownMs: 15000,
     });
 
     return {
@@ -178,7 +184,15 @@ function makeHarness(firstSummary: RoomSummary): Harness {
         socket: () => socket,
         peer: () => peer,
         roomApi,
-        runPoll: () => pollFn?.(),
+        // Fire the earliest still-registered timer (the room poll).
+        runPoll: () => {
+            const first = [...timers.keys()][0];
+            if (first !== undefined) timers.get(first)?.();
+        },
+        // Fire every registered timer once (snapshot so clears mid-fire are safe).
+        fireTimers: () => {
+            for (const fn of [...timers.values()]) fn();
+        },
     };
 }
 
@@ -442,6 +456,65 @@ describe("RoomController", () => {
         expect(h.store.getState().networkUsers).toHaveLength(0);
         // Socket was closed.
         expect(h.socket().readyState).toBe(3);
+    });
+
+    it("invite puts the user on cooldown, keeps the sticky status, and blocks re-invite", async () => {
+        h.store.getState().actions.setDiscovery({ discoverable: true });
+        h.controller.startDiscovery();
+        h.socket().open();
+
+        await h.controller.connectToUser("guest-1");
+        expect(h.store.getState().invitedUserIds).toContain("guest-1");
+        expect(h.store.getState().statusText).toBe(
+            "Invite sent. Waiting for them to join…"
+        );
+
+        const inviteCount = () =>
+            h.socket().parsed().filter((m) => m.type === "invite-to-flight")
+                .length;
+        expect(inviteCount()).toBe(1);
+
+        // Re-inviting the same user while on cooldown sends nothing more.
+        h.controller.inviteOrConnect("guest-1");
+        expect(inviteCount()).toBe(1);
+
+        // A room poll must not clobber the sticky "Invite sent…" status.
+        h.runPoll();
+        await tick();
+        expect(h.store.getState().statusText).toBe(
+            "Invite sent. Waiting for them to join…"
+        );
+    });
+
+    it("clears the invite cooldown after the window elapses", async () => {
+        h.store.getState().actions.setDiscovery({ discoverable: true });
+        h.controller.startDiscovery();
+        h.socket().open();
+
+        await h.controller.connectToUser("guest-1");
+        expect(h.store.getState().invitedUserIds).toContain("guest-1");
+
+        h.fireTimers(); // cooldown expiry
+        expect(h.store.getState().invitedUserIds).not.toContain("guest-1");
+    });
+
+    it("auto-dismisses an incoming invitation after the window", async () => {
+        h = makeHarness(summaryWithPeer());
+        await h.controller.createRoom();
+        h.socket().open();
+
+        h.socket().receive({
+            type: "flight-invitation",
+            flightCode: "ZZZ999",
+            fromName: "Bob",
+        });
+        expect(h.store.getState().incomingInvitation).toMatchObject({
+            flightCode: "ZZZ999",
+            fromName: "Bob",
+        });
+
+        h.fireTimers(); // invitation auto-dismiss
+        expect(h.store.getState().incomingInvitation).toBeNull();
     });
 
     it("handles peer-left by clearing the connection and resuming", async () => {

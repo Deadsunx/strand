@@ -44,6 +44,9 @@ export interface RoomControllerDeps {
     disconnectGraceMs?: number;
     /** How long to wait for the data channel to open before flagging a stall. */
     connectionStallMs?: number;
+    /** How long an invite is "in flight": re-invite blocked, and the invitee's
+     *  toast auto-dismisses after the same window so both sides stay in sync. */
+    inviteCooldownMs?: number;
     setInterval?: (fn: () => void, ms: number) => number;
     clearInterval?: (handle: number) => void;
     now?: () => number;
@@ -90,6 +93,7 @@ export class RoomController {
             | "metricsIntervalMs"
             | "disconnectGraceMs"
             | "connectionStallMs"
+            | "inviteCooldownMs"
             | "setInterval"
             | "clearInterval"
             | "now"
@@ -139,6 +143,14 @@ export class RoomController {
     // Watchdog: fires if the data channel doesn't open soon after the peer joins.
     private stallTimer: number | null = null;
 
+    // Per-invitee cooldown timers: blocks re-inviting the same user until the
+    // window elapses (matches how long their invitation toast stays up).
+    private inviteCooldownTimers = new Map<string, number>();
+    // Auto-dismiss timer for an incoming invitation on the invitee's side.
+    private invitationTimer: number | null = null;
+    // While true, the room poll won't overwrite the "Invite sent…" status.
+    private pendingInviteStatus = false;
+
     constructor(deps: RoomControllerDeps) {
         this.deps = {
             createChunkReader: (file) =>
@@ -147,6 +159,7 @@ export class RoomController {
             metricsIntervalMs: 1000,
             disconnectGraceMs: 8000,
             connectionStallMs: 20000,
+            inviteCooldownMs: 15000,
             setInterval: (fn, ms) =>
                 globalThis.setInterval(fn, ms) as unknown as number,
             clearInterval: (h) => globalThis.clearInterval(h),
@@ -203,6 +216,9 @@ export class RoomController {
         this.stopMetrics();
         this.clearDisconnectGrace();
         this.clearStallWatchdog();
+        this.clearAllInviteCooldowns();
+        this.clearInvitationTimeout();
+        this.pendingInviteStatus = false;
         this.teardownMedia();
         this.signaling?.disconnect({ silent: true });
         this.sender?.cancel();
@@ -229,7 +245,12 @@ export class RoomController {
             status: summary.status,
             peer: summary.peer,
         });
-        if (!this.deps.store.getState().dataChannelOpen) {
+        // Don't clobber the "Invite sent…" message with the generic waiting
+        // text while an invite is still outstanding.
+        if (
+            !this.deps.store.getState().dataChannelOpen &&
+            !this.pendingInviteStatus
+        ) {
             this.actions.setStatusText(statusTextFor(summary));
         }
 
@@ -356,6 +377,7 @@ export class RoomController {
         signaling.on("registered", ({ id }) => this.actions.setMyId(id));
 
         signaling.on("peerJoined", ({ peer, connectionType }) => {
+            this.pendingInviteStatus = false;
             this.actions.setConnectedPeer(peer, connectionType);
             this.actions.setChatEnabled(true);
             this.stopPolling();
@@ -376,9 +398,10 @@ export class RoomController {
             this.actions.setNetworkUsers(users)
         );
 
-        signaling.on("flightInvitation", (invitation) =>
-            this.actions.setIncomingInvitation(invitation)
-        );
+        signaling.on("flightInvitation", (invitation) => {
+            this.actions.setIncomingInvitation(invitation);
+            this.startInvitationTimeout();
+        });
 
         signaling.on("peerLeft", () => this.handlePeerLeft());
         signaling.on("serverError", ({ message }) =>
@@ -785,17 +808,12 @@ export class RoomController {
      *  then invite that user into it. They just accept the toast — no code,
      *  and neither side has to manually create a flight first. */
     async connectToUser(inviteeId: string): Promise<void> {
+        if (this.isOnInviteCooldown(inviteeId)) return;
         if (!this.alreadyInRoom()) {
             await this.createRoom();
         }
         this.ensureAttached();
-        const { roomCode } = this.deps.store.getState();
-        if (this.signaling && roomCode) {
-            this.signaling.invite(inviteeId, roomCode);
-            this.actions.setStatusText(
-                "Invite sent. Waiting for them to join…"
-            );
-        }
+        this.sendInvite(inviteeId);
     }
 
     /** Context-aware action for the network list: invite into the current
@@ -803,9 +821,6 @@ export class RoomController {
     inviteOrConnect(inviteeId: string): void {
         if (this.alreadyInRoom()) {
             this.invite(inviteeId);
-            this.actions.setStatusText(
-                "Invite sent. Waiting for them to join…"
-            );
         } else {
             void this.connectToUser(inviteeId);
         }
@@ -813,19 +828,78 @@ export class RoomController {
 
     /** Invite a discovered nearby user into this flight. */
     invite(inviteeId: string): void {
+        this.sendInvite(inviteeId);
+    }
+
+    /** Send an invite (if not on cooldown) and start the cooldown. Returns
+     *  whether the invite actually went out. */
+    private sendInvite(inviteeId: string): boolean {
         const { roomCode } = this.deps.store.getState();
-        if (!this.signaling || !roomCode) return;
+        if (!this.signaling || !roomCode) return false;
+        if (this.isOnInviteCooldown(inviteeId)) return false;
         this.signaling.invite(inviteeId, roomCode);
+        this.startInviteCooldown(inviteeId);
+        this.pendingInviteStatus = true;
+        this.actions.setStatusText("Invite sent. Waiting for them to join…");
+        return true;
+    }
+
+    private isOnInviteCooldown(inviteeId: string): boolean {
+        return this.inviteCooldownTimers.has(inviteeId);
+    }
+
+    private startInviteCooldown(inviteeId: string): void {
+        if (this.inviteCooldownTimers.has(inviteeId)) return;
+        this.actions.addInvitedUser(inviteeId);
+        const handle = this.deps.setInterval(() => {
+            this.clearInviteCooldown(inviteeId);
+        }, this.deps.inviteCooldownMs);
+        this.inviteCooldownTimers.set(inviteeId, handle);
+    }
+
+    private clearInviteCooldown(inviteeId: string): void {
+        const handle = this.inviteCooldownTimers.get(inviteeId);
+        if (handle !== undefined) {
+            this.deps.clearInterval(handle);
+            this.inviteCooldownTimers.delete(inviteeId);
+        }
+        this.actions.removeInvitedUser(inviteeId);
+    }
+
+    private clearAllInviteCooldowns(): void {
+        for (const handle of this.inviteCooldownTimers.values()) {
+            this.deps.clearInterval(handle);
+        }
+        this.inviteCooldownTimers.clear();
+    }
+
+    /** Auto-dismiss the incoming invitation after the cooldown window, so it
+     *  vanishes on the invitee's side around when the inviter can retry. */
+    private startInvitationTimeout(): void {
+        this.clearInvitationTimeout();
+        this.invitationTimer = this.deps.setInterval(() => {
+            this.clearInvitationTimeout();
+            this.actions.setIncomingInvitation(null);
+        }, this.deps.inviteCooldownMs);
+    }
+
+    private clearInvitationTimeout(): void {
+        if (this.invitationTimer !== null) {
+            this.deps.clearInterval(this.invitationTimer);
+            this.invitationTimer = null;
+        }
     }
 
     /** Accept an incoming invitation: leave the current flight, join theirs. */
     async acceptInvitation(flightCode: string): Promise<void> {
+        this.clearInvitationTimeout();
         this.actions.setIncomingInvitation(null);
         this.leave();
         await this.joinRoom(flightCode);
     }
 
     dismissInvitation(): void {
+        this.clearInvitationTimeout();
         this.actions.setIncomingInvitation(null);
     }
 
@@ -870,6 +944,7 @@ export class RoomController {
     private handlePeerLeft(): void {
         this.clearDisconnectGrace();
         this.clearStallWatchdog();
+        this.pendingInviteStatus = false;
         this.actions.setConnectionStalled(false);
         const state = this.deps.store.getState();
         if (!state.connectedPeer && !state.roomPeer) return;
