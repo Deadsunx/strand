@@ -927,16 +927,26 @@ export class RoomController {
 
     // --- Metrics -----------------------------------------------------------
 
+    /** Cumulative bytes actually delivered on the wire. Sent bytes are counted
+     *  at enqueue time, so subtracting whatever still sits in the channel buffer
+     *  yields true throughput. Without this the rate reads as bursts to 0 and
+     *  back as the buffer fills then drains (the "beam" effect). */
+    private deliveredBytes(): number {
+        const s = this.deps.store.getState();
+        const buffered = this.peer?.bufferedAmount() ?? 0;
+        const sentOnWire = Math.max(0, s.totalBytesSent - buffered);
+        return sentOnWire + s.totalBytesReceived;
+    }
+
     private startMetrics(): void {
         this.stopMetrics();
-        this.metricsSnapshot =
-            this.deps.store.getState().totalBytesSent +
-            this.deps.store.getState().totalBytesReceived;
+        this.metricsSnapshot = this.deliveredBytes();
         const windowSec = this.deps.metricsIntervalMs / 1000;
         this.metricsHandle = this.deps.setInterval(() => {
-            const s = this.deps.store.getState();
-            const total = s.totalBytesSent + s.totalBytesReceived;
-            this.actions.setSpeed((total - this.metricsSnapshot) / windowSec);
+            const total = this.deliveredBytes();
+            this.actions.setSpeed(
+                Math.max(0, (total - this.metricsSnapshot) / windowSec)
+            );
             this.metricsSnapshot = total;
         }, this.deps.metricsIntervalMs);
     }

@@ -3,7 +3,14 @@
 // explicit environment object so it can be unit-tested without a real browser.
 
 /** Flow-control + chunking constants (unchanged from the original client). */
-export const HIGH_WATER_MARK = 1024 * 1024; // 1 MB data-channel buffer ceiling
+// Data-channel send-buffer ceiling. The sender keeps the channel filled up to
+// this level and pauses above it, resuming when it drains past half (see
+// PeerConnection's bufferedAmountLowThreshold). It must exceed the link's
+// bandwidth-delay product, or a high-latency relayed / cross-continent link
+// can't stay saturated and throughput collapses. 8 MB covers roughly a 300 ms
+// round trip at ~200 Mbit/s, while staying well under Chrome's 16 MB hard
+// send-buffer limit.
+export const HIGH_WATER_MARK = 8 * 1024 * 1024; // 8 MB
 export const OPFS_THRESHOLD = 256 * 1024 * 1024; // route >256 MB receives to OPFS
 export const DEFAULT_CHUNK_SIZE = 262144; // 256 KB
 

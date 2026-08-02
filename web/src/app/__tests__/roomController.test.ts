@@ -59,11 +59,12 @@ class FakePeer extends TypedEmitter<PeerEvents> implements SendTransport {
     isOpen() {
         return this.opened;
     }
+    buffered = 0;
     send(data: string | ArrayBuffer) {
         this.sentData.push(data);
     }
     bufferedAmount() {
-        return 0;
+        return this.buffered;
     }
     close() {
         this.opened = false;
@@ -553,6 +554,27 @@ describe("RoomController", () => {
 
         h.fireTimers(); // invitation auto-dismiss
         expect(h.store.getState().incomingInvitation).toBeNull();
+    });
+
+    it("reports send speed from bytes delivered on the wire, not just enqueued", async () => {
+        h = makeHarness(summaryWithPeer());
+        await h.controller.createRoom();
+        h.socket().open();
+        h.socket().receive({
+            type: "peer-joined",
+            flightCode: "ABC123",
+            peer: { id: "guest-1", name: "Bob" },
+            connectionType: "lan",
+        });
+        h.peer().openChannel(); // starts metrics; snapshot = 0
+
+        // 1 MB handed to the channel, but 400 KB still sitting in its buffer.
+        h.store.getState().actions.addMetricsSent(1_000_000);
+        h.peer().buffered = 400_000;
+
+        h.fireTimers(); // metrics tick (1s window)
+        // Delivered = 1_000_000 − 400_000 = 600_000, not the full 1_000_000.
+        expect(h.store.getState().speedBps).toBe(600_000);
     });
 
     it("handles peer-left by clearing the connection and resuming", async () => {
