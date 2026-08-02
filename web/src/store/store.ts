@@ -65,6 +65,8 @@ export interface AppState {
     /** Peer as reported by the signaling channel (live connection). */
     connectedPeer: SignalingPeer | null;
     connectionType: ConnectionType;
+    /** Whether the live path runs through a TURN relay (slower). null = unknown. */
+    relayed: boolean | null;
     dataChannelOpen: boolean;
     /** Peer joined but the secure channel hasn't opened within the grace window. */
     connectionStalled: boolean;
@@ -123,6 +125,7 @@ export interface AppActions {
     }) => void;
     setStatusText: (text: string) => void;
     setConnectedPeer: (peer: SignalingPeer | null, connectionType?: ConnectionType) => void;
+    setRelayed: (relayed: boolean | null) => void;
     setDataChannelOpen: (open: boolean) => void;
     setConnectionStalled: (stalled: boolean) => void;
     setNetworkUsers: (users: NetworkUser[]) => void;
@@ -169,6 +172,7 @@ const initialCoreState: Omit<AppState, "actions" | "myName" | "myId" | "discover
     roomPeer: null,
     connectedPeer: null,
     connectionType: "wan",
+    relayed: null,
     dataChannelOpen: false,
     connectionStalled: false,
     statusText: "",
@@ -232,6 +236,7 @@ export function createAppStore(initialName: string) {
                     connectionType: connectionType ?? s.connectionType,
                 })),
 
+            setRelayed: (relayed) => set({ relayed }),
             setDataChannelOpen: (open) => set({ dataChannelOpen: open }),
             setConnectionStalled: (stalled) => set({ connectionStalled: stalled }),
             setNetworkUsers: (users) => set({ networkUsers: users }),

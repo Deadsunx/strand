@@ -184,6 +184,63 @@ export class PeerConnection
         return this.channel?.bufferedAmount ?? 0;
     }
 
+    /**
+     * Whether the active ICE candidate pair runs through a TURN relay. A relay
+     * hop is slower and bandwidth-limited versus a direct path, so this is the
+     * first thing to check when a WAN transfer is slow. Returns null if it
+     * can't be determined. Read-only diagnostic.
+     */
+    async isRelayed(): Promise<boolean | null> {
+        const pc = this.pc;
+        if (!pc) return null;
+        try {
+            const stats = await pc.getStats();
+
+            // Find the nominated/selected candidate pair.
+            let selectedPairId: string | undefined;
+            stats.forEach((report) => {
+                if (report.type === "transport") {
+                    selectedPairId =
+                        (report as { selectedCandidatePairId?: string })
+                            .selectedCandidatePairId ?? selectedPairId;
+                }
+            });
+            let pair: RTCIceCandidatePairStats | undefined;
+            stats.forEach((report) => {
+                if (report.type !== "candidate-pair") return;
+                const p = report as RTCIceCandidatePairStats & {
+                    nominated?: boolean;
+                };
+                if (selectedPairId) {
+                    if (p.id === selectedPairId) pair = p;
+                } else if (p.nominated && p.state === "succeeded") {
+                    pair = p;
+                }
+            });
+            if (!pair) return null;
+
+            // Either endpoint being a relay candidate means the path is relayed.
+            let relayed = false;
+            stats.forEach((report) => {
+                const isEndpoint =
+                    (report.type === "local-candidate" &&
+                        report.id === pair!.localCandidateId) ||
+                    (report.type === "remote-candidate" &&
+                        report.id === pair!.remoteCandidateId);
+                if (
+                    isEndpoint &&
+                    (report as { candidateType?: string }).candidateType ===
+                        "relay"
+                ) {
+                    relayed = true;
+                }
+            });
+            return relayed;
+        } catch {
+            return null;
+        }
+    }
+
     // --- Track (re)negotiation for screen share ----------------------------
 
     /** Add all of a stream's tracks and renegotiate once. Returns the senders. */

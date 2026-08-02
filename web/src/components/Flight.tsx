@@ -13,6 +13,7 @@ export function Flight() {
     const statusText = useAppState((s) => s.statusText);
     const connectedPeer = useAppState((s) => s.connectedPeer);
     const connectionType = useAppState((s) => s.connectionType);
+    const relayed = useAppState((s) => s.relayed);
     const dataChannelOpen = useAppState((s) => s.dataChannelOpen);
     const connectionStalled = useAppState((s) => s.connectionStalled);
 
@@ -32,8 +33,18 @@ export function Flight() {
                 >
                     {statusText || "Setting up…"}
                     {connectedPeer && dataChannelOpen && (
-                        <span className="conn-badge">
+                        <span
+                            className="conn-badge"
+                            title={
+                                relayed
+                                    ? "Relayed through a TURN server — slower than a direct link, but works through strict firewalls."
+                                    : relayed === false
+                                    ? "Direct peer-to-peer link."
+                                    : undefined
+                            }
+                        >
                             {connectionType.toUpperCase()}
+                            {relayed ? " · RELAY" : relayed === false ? " · DIRECT" : ""}
                         </span>
                     )}
                 </div>

@@ -127,12 +127,20 @@ export class FileSender extends TypedEmitter<SenderEvents> {
             this.transport.send(encodeFileMetadata(meta));
 
             let sent = 0;
+            // Prefetch: keep one chunk read in flight while we send the current
+            // one and wait on backpressure, so disk I/O overlaps the network
+            // instead of stalling the pipe between chunks.
+            let pending: Promise<ArrayBuffer | null> = reader.read();
             for (;;) {
                 await this.waitForCapacity();
-                if (this.cancelled) return;
+                if (this.cancelled) {
+                    void pending.catch(() => {});
+                    return;
+                }
 
-                const chunk = await reader.read();
+                const chunk = await pending;
                 if (chunk === null) break;
+                pending = reader.read(); // start the next read now
 
                 this.transport.send(chunk);
                 sent += chunk.byteLength;

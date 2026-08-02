@@ -60,11 +60,15 @@ class FakePeer extends TypedEmitter<PeerEvents> implements SendTransport {
         return this.opened;
     }
     buffered = 0;
+    relayed: boolean | null = null;
     send(data: string | ArrayBuffer) {
         this.sentData.push(data);
     }
     bufferedAmount() {
         return this.buffered;
+    }
+    async isRelayed() {
+        return this.relayed;
     }
     close() {
         this.opened = false;
@@ -575,6 +579,23 @@ describe("RoomController", () => {
         h.fireTimers(); // metrics tick (1s window)
         // Delivered = 1_000_000 − 400_000 = 600_000, not the full 1_000_000.
         expect(h.store.getState().speedBps).toBe(600_000);
+    });
+
+    it("surfaces a relayed (TURN) path once the channel opens", async () => {
+        h = makeHarness(summaryWithPeer());
+        await h.controller.createRoom();
+        h.socket().open();
+        h.socket().receive({
+            type: "peer-joined",
+            flightCode: "ABC123",
+            peer: { id: "guest-1", name: "Bob" },
+            connectionType: "wan",
+        });
+        h.peer().relayed = true;
+        h.peer().openChannel();
+        await tick(); // detectTransport awaits peer.isRelayed()
+
+        expect(h.store.getState().relayed).toBe(true);
     });
 
     it("handles peer-left by clearing the connection and resuming", async () => {

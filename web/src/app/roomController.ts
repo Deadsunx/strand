@@ -421,6 +421,7 @@ export class RoomController {
             this.actions.setStatusText("Connected");
             this.stopPolling();
             this.startMetrics();
+            void this.detectTransport();
             this.pumpSendQueue();
         });
         peer.on("close", () => this.handlePeerLeft());
@@ -936,6 +937,19 @@ export class RoomController {
         const buffered = this.peer?.bufferedAmount() ?? 0;
         const sentOnWire = Math.max(0, s.totalBytesSent - buffered);
         return sentOnWire + s.totalBytesReceived;
+    }
+
+    /** Detect whether the live path is relayed (TURN) and surface it, so a slow
+     *  WAN transfer is explainable at a glance. Best-effort, read-only. */
+    private async detectTransport(): Promise<void> {
+        try {
+            const relayed = await this.peer?.isRelayed();
+            if (relayed !== null && relayed !== undefined) {
+                this.actions.setRelayed(relayed);
+            }
+        } catch {
+            /* diagnostic only */
+        }
     }
 
     private startMetrics(): void {
