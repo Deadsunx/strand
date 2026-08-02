@@ -392,6 +392,58 @@ describe("RoomController", () => {
         expect(all[1]).toMatchObject({ from: "peer", text: "hi back" });
     });
 
+    it("startDiscovery advertises on the home screen without attaching a room", async () => {
+        h.store.getState().actions.setDiscovery({ discoverable: true });
+        h.controller.startDiscovery();
+        h.socket().open();
+
+        const msgs = h.socket().parsed();
+        expect(msgs[0]).toMatchObject({
+            type: "register-details",
+            name: "Alice",
+            discoverable: true,
+        });
+        // No flight yet → nothing to attach.
+        expect(msgs.some((m) => m.type === "attach-room")).toBe(false);
+    });
+
+    it("connectToUser (from home) creates a flight, attaches, and invites in one step", async () => {
+        h.store.getState().actions.setDiscovery({ discoverable: true });
+        h.controller.startDiscovery();
+        h.socket().open();
+
+        await h.controller.connectToUser("guest-1");
+
+        const msgs = h.socket().parsed();
+        expect(msgs.some((m) => m.type === "attach-room")).toBe(true);
+        expect(msgs).toContainEqual(
+            expect.objectContaining({
+                type: "invite-to-flight",
+                inviteeId: "guest-1",
+                flightCode: "ABC123",
+            })
+        );
+        // We now hold the flight and are on the flight screen.
+        expect(h.store.getState().screen).toBe("flight");
+        expect(h.store.getState().participantId).toBe("host-1");
+    });
+
+    it("stopDiscovery (presence mode) drops the socket and clears the network list", async () => {
+        h.store.getState().actions.setDiscovery({ discoverable: true });
+        h.controller.startDiscovery();
+        h.socket().open();
+        h.socket().receive({
+            type: "users-on-network-update",
+            users: [{ id: "guest-1", name: "Bob" }],
+        });
+        expect(h.store.getState().networkUsers).toHaveLength(1);
+
+        h.controller.stopDiscovery();
+        expect(h.store.getState().networkUsers).toHaveLength(0);
+        // Socket was closed.
+        expect(h.socket().readyState).toBe(3);
+    });
+
     it("handles peer-left by clearing the connection and resuming", async () => {
         h = makeHarness(summaryWithPeer());
         await h.controller.createRoom();

@@ -5,6 +5,7 @@ import {
     useController,
 } from "../app/AppContext.tsx";
 import { SilkThread } from "./SilkThread.tsx";
+import { NetworkUsers } from "./NetworkUsers.tsx";
 
 export function Home() {
     const controller = useController();
@@ -14,6 +15,20 @@ export function Home() {
 
     const [code, setCode] = useState("");
     const [busy, setBusy] = useState<"create" | "join" | null>(null);
+
+    // Presence on the home screen: when discoverable, open the socket so we
+    // advertise ourselves and receive the network list without needing a flight
+    // first. Toggling off (in presence mode) drops the socket. No unmount
+    // cleanup — entering a flight unmounts Home but must keep the socket alive.
+    useEffect(() => {
+        if (discoverable) controller.startDiscovery();
+        else controller.stopDiscovery();
+    }, [discoverable, controller]);
+
+    // Re-advertise when the shared PIN changes while already discoverable.
+    useEffect(() => {
+        if (discoverable) controller.refreshRegistration();
+    }, [networkToken, discoverable, controller]);
 
     // Pre-fill from a shared invite link (?code=ABC123).
     useEffect(() => {
@@ -110,9 +125,11 @@ export function Home() {
             <details className="discovery">
                 <summary>Nearby-device discovery (optional)</summary>
                 <p className="discovery-note">
-                    Off by default for privacy. When enabled, others on your
-                    network can see your name and invite you. Add a shared PIN to
-                    only match people who enter the same one.
+                    Off by default for privacy. When both people turn this on,
+                    you see each other's names below — tap <strong>Connect</strong>{" "}
+                    and a flight opens and invites them automatically, no code
+                    needed. Add a shared PIN to only match people who enter the
+                    same one.
                 </p>
                 <label className="checkbox">
                     <input
@@ -142,6 +159,8 @@ export function Home() {
                     />
                 </label>
             </details>
+
+            {discoverable && <NetworkUsers actionLabel="Connect" />}
         </section>
     );
 }

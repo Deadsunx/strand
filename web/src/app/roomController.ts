@@ -103,6 +103,10 @@ export class RoomController {
     private receiver: FileReceiver | null = null;
 
     private signalingInitiated = false;
+    // Whether we've sent attach-room for the current room on the live socket.
+    // Tracked separately from signalingInitiated because the socket can open in
+    // "presence" mode (home screen, no room yet) and attach later.
+    private attached = false;
     // Guards create/join so a double-submit (double-click, Enter+click, or a
     // StrictMode remount) can't fire two room mutations and trip the server's
     // "Room already has two participants" path.
@@ -209,6 +213,7 @@ export class RoomController {
         this.sender = null;
         this.receiver = null;
         this.signalingInitiated = false;
+        this.attached = false;
         this.mutatingRoom = false;
         this.actions.resetRoom();
     }
@@ -235,6 +240,23 @@ export class RoomController {
         // later optimization.)
         if (!this.signalingInitiated) {
             this.connectSignaling();
+        }
+        // If the socket was already open in presence mode when this room was
+        // created, it hasn't attached yet — do it now.
+        this.ensureAttached();
+    }
+
+    /** Send attach-room once, when we hold a room and the socket is live. */
+    private ensureAttached(): void {
+        const { roomCode, participantId } = this.deps.store.getState();
+        if (
+            this.signaling?.isConnected() &&
+            roomCode &&
+            participantId &&
+            !this.attached
+        ) {
+            this.signaling.attachRoom({ roomCode, participantId });
+            this.attached = true;
         }
     }
 
@@ -326,12 +348,9 @@ export class RoomController {
                 discoverable: state.discoverable,
                 networkToken: state.networkToken ?? undefined,
             });
-            if (state.roomCode && state.participantId) {
-                signaling.attachRoom({
-                    roomCode: state.roomCode,
-                    participantId: state.participantId,
-                });
-            }
+            // Attaches only if we already hold a room; in presence mode (home
+            // screen) there's nothing to attach until a flight is created.
+            this.ensureAttached();
         });
 
         signaling.on("registered", ({ id }) => this.actions.setMyId(id));
@@ -722,7 +741,75 @@ export class RoomController {
         this.actions.setMicActive(false);
     }
 
+    // --- Nearby presence (home screen) -------------------------------------
+
+    /** Open the presence socket so we register and receive the network list
+     *  even before entering a flight. Idempotent — safe to call repeatedly. */
+    startDiscovery(): void {
+        if (!this.signaling) {
+            this.connectSignaling();
+        } else {
+            this.refreshRegistration();
+        }
+    }
+
+    /** Stop advertising. In presence-only mode (no flight yet) drop the socket
+     *  entirely; if we already hold a flight, just re-register as hidden so the
+     *  live connection is preserved. */
+    stopDiscovery(): void {
+        if (this.alreadyInRoom()) {
+            this.refreshRegistration();
+            return;
+        }
+        this.actions.setNetworkUsers([]);
+        this.signaling?.disconnect({ silent: true });
+        this.signaling = null;
+        this.receiver = null;
+        this.signalingInitiated = false;
+    }
+
+    /** Re-send our advertised details after name / discoverable / PIN change. */
+    refreshRegistration(): void {
+        if (!this.signaling?.isConnected()) return;
+        const s = this.deps.store.getState();
+        this.signaling.registerDetails({
+            name: s.myName,
+            discoverable: s.discoverable,
+            networkToken: s.networkToken ?? undefined,
+        });
+    }
+
     // --- Nearby-device invitations -----------------------------------------
+
+    /** One tap from a discovered name: create our flight if we don't have one,
+     *  then invite that user into it. They just accept the toast — no code,
+     *  and neither side has to manually create a flight first. */
+    async connectToUser(inviteeId: string): Promise<void> {
+        if (!this.alreadyInRoom()) {
+            await this.createRoom();
+        }
+        this.ensureAttached();
+        const { roomCode } = this.deps.store.getState();
+        if (this.signaling && roomCode) {
+            this.signaling.invite(inviteeId, roomCode);
+            this.actions.setStatusText(
+                "Invite sent. Waiting for them to join…"
+            );
+        }
+    }
+
+    /** Context-aware action for the network list: invite into the current
+     *  flight if we're in one, otherwise spin one up and invite in one step. */
+    inviteOrConnect(inviteeId: string): void {
+        if (this.alreadyInRoom()) {
+            this.invite(inviteeId);
+            this.actions.setStatusText(
+                "Invite sent. Waiting for them to join…"
+            );
+        } else {
+            void this.connectToUser(inviteeId);
+        }
+    }
 
     /** Invite a discovered nearby user into this flight. */
     invite(inviteeId: string): void {

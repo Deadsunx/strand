@@ -1,6 +1,9 @@
 import { useAppState, useController } from "../app/AppContext.tsx";
 
-export function NetworkUsers() {
+// Lists discoverable people on your network. The action is context-aware:
+// on the home screen "Connect" spins up a flight and invites in one tap; in a
+// flight lobby "Invite" pulls them into the flight you already hold.
+export function NetworkUsers({ actionLabel = "Invite" }: { actionLabel?: string }) {
     const users = useAppState((s) => s.networkUsers);
     const controller = useController();
 
@@ -16,9 +19,9 @@ export function NetworkUsers() {
                         <button
                             type="button"
                             className="btn btn-secondary btn-sm"
-                            onClick={() => controller.invite(user.id)}
+                            onClick={() => controller.inviteOrConnect(user.id)}
                         >
-                            Invite
+                            {actionLabel}
                         </button>
                     </li>
                 ))}
